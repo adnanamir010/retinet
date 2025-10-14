@@ -206,10 +206,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-data/
-!data/__init__.py
-!data/mit_dataset.py
-!data/cgintrinsics_dataset.py
+data/*
+!data/*.py
+
 
 runs/
 checkpoints/
