@@ -1,5 +1,3 @@
-# train_retinet.py
-
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -17,6 +15,7 @@ import matplotlib.pyplot as plt
 
 from models.retinet import RetiNet
 from losses.intrinsic_loss import IntrinsicLoss
+from losses.cgintrinsics_loss import CGIntrinsicsLoss
 from data.shapenet_dataset import ShapeNetIntrinsicsDataset
 from data.mit_dataset import MITIntrinsicDataset
 from utils.metrics import compute_all_metrics
@@ -315,11 +314,19 @@ def main(args):
     print(f"  Stage 2: {stage2_params:,}")
     
     # Loss and optimizer
-    criterion = IntrinsicLoss(
-        gamma_r=args.gamma_r,
-        gamma_s=args.gamma_s,
-        gamma_imf=args.gamma_imf
-    )
+    if args.use_cg_loss:
+        criterion = CGIntrinsicsLoss(
+            gamma_r=args.gamma_r,
+            gamma_s=args.gamma_s,
+            gamma_imf=args.gamma_imf,
+            gamma_grad=1.0
+        )
+    else:
+        criterion = IntrinsicLoss(
+            gamma_r=args.gamma_r,
+            gamma_s=args.gamma_s,
+            gamma_imf=args.gamma_imf
+        )
     
     optimizer = optim.SGD(
         model.parameters(),
@@ -451,10 +458,14 @@ if __name__ == "__main__":
     # Model
     parser.add_argument('--use_dropout', action='store_true', default=True)
     
+    # Loss type
+    parser.add_argument('--use_cg_loss', action='store_true', default=False,
+                       help='Use CGIntrinsicsLoss instead of IntrinsicLoss')
     # Loss weights
     parser.add_argument('--gamma_r', type=float, default=1.0)
     parser.add_argument('--gamma_s', type=float, default=1.0)
     parser.add_argument('--gamma_imf', type=float, default=1.0)
+    parser.add_argument('--gamma_grad', type=float, default=1.0)
     
     # Training
     parser.add_argument('--epochs', type=int, default=100)
