@@ -1,3 +1,5 @@
+# train_retinet.py
+
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -15,7 +17,7 @@ import matplotlib.pyplot as plt
 
 from models.retinet import RetiNet
 from losses.intrinsic_loss import IntrinsicLoss
-from data.cgintrinsics_dataset import CGIntrinsicsDataset
+from data.shapenet_dataset import ShapeNetIntrinsicsDataset
 from data.mit_dataset import MITIntrinsicDataset
 from utils.metrics import compute_all_metrics
 
@@ -30,10 +32,18 @@ def save_visualizations(model, dataloader, device, save_dir, epoch, num_samples=
             if batch_idx >= num_samples:
                 break
             
-            original = batch['original'].to(device)
-            reflectance_gt = batch['reflectance'].to(device)
-            shading_gt = batch['shading'].to(device)
-            name = batch['name'][0] if isinstance(batch['name'], list) else batch['name']
+            # Handle both ShapeNet (tuple) and MIT (dict) formats
+            if isinstance(batch, dict):
+                original = batch['original'].to(device)
+                reflectance_gt = batch['reflectance'].to(device)
+                shading_gt = batch['shading'].to(device)
+                name = batch['name'][0] if isinstance(batch['name'], list) else batch['name']
+            else:
+                original, reflectance_gt, shading_gt = batch
+                original = original.to(device)
+                reflectance_gt = reflectance_gt.to(device)
+                shading_gt = shading_gt.to(device)
+                name = f'sample_{batch_idx}'
             
             reflectance_pred, shading_pred, _, _ = model(original)
             
@@ -73,7 +83,7 @@ def save_visualizations(model, dataloader, device, save_dir, epoch, num_samples=
             axes[1, 2].axis('off')
             
             plt.tight_layout()
-            safe_name = name.replace('/', '_').replace('\\', '_')
+            safe_name = str(name).replace('/', '_').replace('\\', '_')
             plt.savefig(os.path.join(save_dir, f'epoch_{epoch}_{safe_name}.png'), dpi=100)
             plt.close()
 
@@ -90,9 +100,11 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, writer, 
     pbar = tqdm(dataloader, desc=f"Epoch {epoch}")
     
     for batch_idx, batch in enumerate(pbar):
-        original = batch['original'].to(device)
-        reflectance_gt = batch['reflectance'].to(device)
-        shading_gt = batch['shading'].to(device)
+        # ShapeNet returns tuple (rgb, albedo, shading)
+        original, reflectance_gt, shading_gt = batch
+        original = original.to(device)
+        reflectance_gt = reflectance_gt.to(device)
+        shading_gt = shading_gt.to(device)
         
         reflectance_pred, shading_pred, _, _ = model(original)
         
@@ -131,8 +143,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, writer, 
     return avg_loss, avg_loss_r, avg_loss_s, avg_loss_imf, global_step
 
 
-def validate(model, dataloader, criterion, device, epoch, writer):
-    """Validate on MIT dataset"""
+def validate(model, dataloader, criterion, device, epoch, writer, split_name='Val'):
+    """Validate on MIT or ShapeNet val dataset"""
     model.eval()
     
     total_loss = 0.0
@@ -146,10 +158,17 @@ def validate(model, dataloader, criterion, device, epoch, writer):
     }
     
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation"):
-            original = batch['original'].to(device)
-            reflectance_gt = batch['reflectance'].to(device)
-            shading_gt = batch['shading'].to(device)
+        for batch in tqdm(dataloader, desc=f"Validation ({split_name})"):
+            # Handle both ShapeNet (tuple) and MIT (dict) formats
+            if isinstance(batch, dict):
+                original = batch['original'].to(device)
+                reflectance_gt = batch['reflectance'].to(device)
+                shading_gt = batch['shading'].to(device)
+            else:
+                original, reflectance_gt, shading_gt = batch
+                original = original.to(device)
+                reflectance_gt = reflectance_gt.to(device)
+                shading_gt = shading_gt.to(device)
             
             reflectance_pred, shading_pred, _, _ = model(original)
             
@@ -175,16 +194,16 @@ def validate(model, dataloader, criterion, device, epoch, writer):
     all_metrics['dssim_avg'] = (all_metrics['dssim_reflectance'] + all_metrics['dssim_shading']) / 2
     
     # Log to tensorboard
-    writer.add_scalar('Val/Loss_Total', avg_loss, epoch)
-    writer.add_scalar('Val/MSE_Reflectance', all_metrics['mse_reflectance'], epoch)
-    writer.add_scalar('Val/MSE_Shading', all_metrics['mse_shading'], epoch)
-    writer.add_scalar('Val/MSE_Average', all_metrics['mse_avg'], epoch)
-    writer.add_scalar('Val/LMSE_Reflectance', all_metrics['lmse_reflectance'], epoch)
-    writer.add_scalar('Val/LMSE_Shading', all_metrics['lmse_shading'], epoch)
-    writer.add_scalar('Val/LMSE_Average', all_metrics['lmse_avg'], epoch)
-    writer.add_scalar('Val/DSSIM_Reflectance', all_metrics['dssim_reflectance'], epoch)
-    writer.add_scalar('Val/DSSIM_Shading', all_metrics['dssim_shading'], epoch)
-    writer.add_scalar('Val/DSSIM_Average', all_metrics['dssim_avg'], epoch)
+    writer.add_scalar(f'{split_name}/Loss_Total', avg_loss, epoch)
+    writer.add_scalar(f'{split_name}/MSE_Reflectance', all_metrics['mse_reflectance'], epoch)
+    writer.add_scalar(f'{split_name}/MSE_Shading', all_metrics['mse_shading'], epoch)
+    writer.add_scalar(f'{split_name}/MSE_Average', all_metrics['mse_avg'], epoch)
+    writer.add_scalar(f'{split_name}/LMSE_Reflectance', all_metrics['lmse_reflectance'], epoch)
+    writer.add_scalar(f'{split_name}/LMSE_Shading', all_metrics['lmse_shading'], epoch)
+    writer.add_scalar(f'{split_name}/LMSE_Average', all_metrics['lmse_avg'], epoch)
+    writer.add_scalar(f'{split_name}/DSSIM_Reflectance', all_metrics['dssim_reflectance'], epoch)
+    writer.add_scalar(f'{split_name}/DSSIM_Shading', all_metrics['dssim_shading'], epoch)
+    writer.add_scalar(f'{split_name}/DSSIM_Average', all_metrics['dssim_avg'], epoch)
     
     return avg_loss, all_metrics
 
@@ -229,23 +248,31 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
     
-    # Training dataset: CGIntrinsics
-    train_dataset = CGIntrinsicsDataset(
+    # Training dataset: ShapeNet
+    train_dataset = ShapeNetIntrinsicsDataset(
         root_dir=args.data_dir,
-        list_dir=args.list_dir,
-        augment=args.augment,
-        image_size=(args.image_height, args.image_width),
-        max_samples=args.max_samples
-    )
-    
-    # Validation dataset: MIT
-    val_dataset = MITIntrinsicDataset(
-        root_dir=args.val_dir,
-        augment=False,
+        split='train',
         image_size=(args.image_height, args.image_width)
     )
     
-    print(f"Train: {len(train_dataset)} images, Val: {len(val_dataset)} images")
+    # Validation dataset: ShapeNet val split
+    shapenet_val_dataset = ShapeNetIntrinsicsDataset(
+        root_dir=args.data_dir,
+        split='val',
+        image_size=(args.image_height, args.image_width)
+    )
+    
+    # Optional: MIT dataset for additional validation
+    mit_val_dataset = None
+    if args.val_on_mit and os.path.exists(args.mit_dir):
+        mit_val_dataset = MITIntrinsicDataset(
+            root_dir=args.mit_dir,
+            augment=False,
+            image_size=(args.image_height, args.image_width)
+        )
+        print(f"Train: {len(train_dataset)} | Val (ShapeNet): {len(shapenet_val_dataset)} | Val (MIT): {len(mit_val_dataset)}")
+    else:
+        print(f"Train: {len(train_dataset)} | Val (ShapeNet): {len(shapenet_val_dataset)}")
     
     # Create dataloaders
     train_loader = DataLoader(
@@ -257,12 +284,22 @@ def main(args):
     )
     
     val_loader = DataLoader(
-        val_dataset,
+        shapenet_val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True
     )
+    
+    mit_val_loader = None
+    if mit_val_dataset is not None:
+        mit_val_loader = DataLoader(
+            mit_val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True
+        )
     
     # Create model
     model = RetiNet(
@@ -271,7 +308,11 @@ def main(args):
     ).to(device)
     
     total_params = sum(p.numel() for p in model.parameters())
+    stage1_params = sum(p.numel() for p in model.stage1.parameters())
+    stage2_params = sum(p.numel() for p in model.stage2.parameters())
     print(f"Total parameters: {total_params:,}")
+    print(f"  Stage 1: {stage1_params:,}")
+    print(f"  Stage 2: {stage2_params:,}")
     
     # Loss and optimizer
     criterion = IntrinsicLoss(
@@ -337,16 +378,28 @@ def main(args):
         print(f"  Shading: {train_loss_s:.4f}")
         print(f"  Image Formation: {train_loss_imf:.4f}")
         
-        # Validate on MIT dataset
+        # Validate on ShapeNet val split
         val_loss, val_metrics = validate(
-            model, val_loader, criterion, device, epoch, writer
+            model, val_loader, criterion, device, epoch, writer, split_name='Val_ShapeNet'
         )
         
-        print(f"\nVal Loss (MIT): {val_loss:.4f}")
+        print(f"\nVal Loss (ShapeNet): {val_loss:.4f}")
         print(f"Metrics:")
         print(f"  MSE - R: {val_metrics['mse_reflectance']:.6f}, S: {val_metrics['mse_shading']:.6f}, Avg: {val_metrics['mse_avg']:.6f}")
         print(f"  LMSE - R: {val_metrics['lmse_reflectance']:.6f}, S: {val_metrics['lmse_shading']:.6f}, Avg: {val_metrics['lmse_avg']:.6f}")
         print(f"  DSSIM - R: {val_metrics['dssim_reflectance']:.6f}, S: {val_metrics['dssim_shading']:.6f}, Avg: {val_metrics['dssim_avg']:.6f}")
+        
+        # Optional: Validate on MIT dataset
+        if mit_val_loader is not None:
+            mit_val_loss, mit_val_metrics = validate(
+                model, mit_val_loader, criterion, device, epoch, writer, split_name='Val_MIT'
+            )
+            
+            print(f"\nVal Loss (MIT): {mit_val_loss:.4f}")
+            print(f"MIT Metrics:")
+            print(f"  MSE - R: {mit_val_metrics['mse_reflectance']:.6f}, S: {mit_val_metrics['mse_shading']:.6f}, Avg: {mit_val_metrics['mse_avg']:.6f}")
+            print(f"  LMSE - R: {mit_val_metrics['lmse_reflectance']:.6f}, S: {mit_val_metrics['lmse_shading']:.6f}, Avg: {mit_val_metrics['lmse_avg']:.6f}")
+            print(f"  DSSIM - R: {mit_val_metrics['dssim_reflectance']:.6f}, S: {mit_val_metrics['dssim_shading']:.6f}, Avg: {mit_val_metrics['dssim_avg']:.6f}")
         
         # Save visualizations
         if (epoch + 1) % args.vis_freq == 0:
@@ -382,22 +435,18 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train RetiNet')
+    parser = argparse.ArgumentParser(description='Train RetiNet on ShapeNet')
     
     # Data
     parser.add_argument('--data_dir', type=str, 
-                       default='E:/dev/intrinsics_final/intrinsics_final',
-                       help='Path to CGIntrinsics intrinsics_final directory')
-    parser.add_argument('--list_dir', type=str,
-                       default='E:/dev/intrinsics_final/intrinsics_final/train_list',
-                       help='Path to train_list directory with img_batch.p')
-    parser.add_argument('--val_dir', type=str, default='data',
-                       help='Path to MIT dataset for validation')
-    parser.add_argument('--max_samples', type=int, default=None,
-                   help='Limit training samples for testing (None = use all)')
+                       default=r'E:\dev\Shapenet_intrinsics',
+                       help='Path to ShapeNet intrinsics dataset')
+    parser.add_argument('--mit_dir', type=str, default='data',
+                       help='Path to MIT dataset for additional validation')
+    parser.add_argument('--val_on_mit', action='store_true', default=False,
+                       help='Also validate on MIT dataset')
     parser.add_argument('--image_height', type=int, default=120)
     parser.add_argument('--image_width', type=int, default=160)
-    parser.add_argument('--augment', action='store_true', default=True)
     
     # Model
     parser.add_argument('--use_dropout', action='store_true', default=True)
@@ -415,12 +464,12 @@ if __name__ == "__main__":
     parser.add_argument('--weight_decay', type=float, default=0.0005)
     
     # Checkpointing
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints/retinet')
+    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints/retinet_shapenet')
     parser.add_argument('--save_freq', type=int, default=5)
     parser.add_argument('--resume', type=str, default=None)
     
     # Logging
-    parser.add_argument('--log_dir', type=str, default='runs/retinet')
+    parser.add_argument('--log_dir', type=str, default='runs/retinet_shapenet')
     parser.add_argument('--vis_freq', type=int, default=5)
     
     # Misc
